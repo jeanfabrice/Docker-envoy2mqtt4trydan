@@ -122,7 +122,9 @@ def get_meter_eids(headers):
 # ---------------------------------------------------------------------------
 # MQTT client
 # ---------------------------------------------------------------------------
-_mqtt_connected = False
+_mqtt_connected    = False
+_app_ready         = False
+_last_publish_time = 0.0
 
 
 def make_mqtt_client():
@@ -226,12 +228,14 @@ def poll_livedata(headers):
 # MQTT publishing
 # ---------------------------------------------------------------------------
 def publish(client, sun_power, grid_power, battery_power):
+    global _last_publish_time
     if not _mqtt_connected:
         raise ConnectionError("MQTT broker not connected")
 
     client.publish(TOPIC_SUN,     str(sun_power),     qos=0)
     client.publish(TOPIC_GRID,    str(grid_power),    qos=0)
     client.publish(TOPIC_BATTERY, str(battery_power), qos=0)
+    _last_publish_time = time.monotonic()
 
     print(
         f"[publish] {TOPIC_SUN}={sun_power}W  "
@@ -241,9 +245,58 @@ def publish(client, sun_power, grid_power, battery_power):
 
 
 # ---------------------------------------------------------------------------
+# Embedded HTTP health server (Kubernetes readiness + liveness probes)
+# ---------------------------------------------------------------------------
+import http.server
+import socketserver
+import threading
+
+_HEALTH_PORT      = 8080
+_LIVENESS_TIMEOUT = max(60.0, POLL_INTERVAL * 10)
+
+
+class _HealthHandler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/readyz":
+            if _app_ready and _mqtt_connected:
+                self._respond(200, "OK")
+            else:
+                self._respond(503, "NOT READY")
+        elif self.path == "/healthz":
+            if not _app_ready:
+                self._respond(200, "STARTING")
+            elif time.monotonic() - _last_publish_time < _LIVENESS_TIMEOUT:
+                self._respond(200, "OK")
+            else:
+                self._respond(503, "STALE")
+        else:
+            self._respond(404, "NOT FOUND")
+
+    def _respond(self, code, body):
+        payload = body.encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "text/plain")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def log_message(self, fmt, *args):
+        pass
+
+
+def start_health_server():
+    socketserver.TCPServer.allow_reuse_address = True
+    server = socketserver.TCPServer(("0.0.0.0", _HEALTH_PORT), _HealthHandler)
+    t = threading.Thread(target=server.serve_forever, daemon=True, name="health-server")
+    t.start()
+    print(f"[health] Listening on 0.0.0.0:{_HEALTH_PORT} (/healthz, /readyz)")
+
+
+# ---------------------------------------------------------------------------
 # Main loop
 # ---------------------------------------------------------------------------
 def main():
+    start_health_server()
     if not ENVOY_USER or not ENVOY_PASSWORD:
         sys.exit("[error] ENVOY_USER and ENVOY_PASSWORD are required. Set the environment variables.")
 
@@ -273,6 +326,10 @@ def main():
 
     if not _mqtt_connected:
         sys.exit(f"[error] Could not connect to MQTT broker {MQTT_HOST}:{MQTT_PORT}")
+
+    global _app_ready
+    _app_ready = True
+    print("[health] Application ready")
 
     def shutdown(signum, frame):
         print("[shutdown] Publishing zero values before exit…")

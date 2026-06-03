@@ -65,6 +65,37 @@ trydan/trydan_v2c_grid_power    → "-820"   # negative = exporting to grid
 trydan/trydan_v2c_battery_power → "0"
 ```
 
+## Health probes (Kubernetes)
+
+The container exposes an HTTP server on port **8080** with two endpoints:
+
+| Endpoint | Probe | Behaviour |
+|---|---|---|
+| `/healthz` | liveness | `200` while the process is alive; `503` if the main loop stops publishing (stale) |
+| `/readyz` | readiness | `200` once initialised and MQTT is connected; `503` otherwise |
+
+Kubernetes probe configuration:
+
+```yaml
+readinessProbe:
+  httpGet:
+    path: /readyz
+    port: 8080
+  initialDelaySeconds: 30
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: 8080
+  initialDelaySeconds: 90
+  periodSeconds: 30
+  timeoutSeconds: 5
+  failureThreshold: 3
+```
+
 ## Running with Docker
 
 ```bash

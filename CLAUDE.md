@@ -27,6 +27,7 @@ The entire logic lives in `envoy2mqtt4trydan.py`. Execution flow:
    - `false` (default) → `poll_meters()`: discovers meter eids via `GET /ivp/meters`, then polls `GET /ivp/meters/readings` and reads `activePower` by eid
    - `true` → `poll_livedata()`: activates stream via `POST /ivp/livedata/stream`, then polls `GET /ivp/livedata/status` and reads `meters.pv/grid/storage.agg_p_mw / 1000`
 4. **MQTT publish** — `publish()` called after each poll, three topics as plain integer strings (watts)
+5. **Health server** — daemon thread started at the top of `main()`, serves `/healthz` (liveness) and `/readyz` (readiness) on port 8080
 
 ## MQTT topics
 
@@ -52,3 +53,10 @@ The entire logic lives in `envoy2mqtt4trydan.py`. Execution flow:
 | `MQTT_INSECURE` | `false` | Skip cert verification (self-signed brokers) |
 | `RECONNECT_DELAY` | `5` | Seconds between reconnect attempts |
 | `DEBUG` | `false` | Logs HTTP requests, full JSON responses, auth/MQTT details |
+
+## Health endpoints (port 8080)
+
+| Endpoint | Probe | 200 | 503 |
+|---|---|---|---|
+| `/healthz` | liveness | process alive (or still starting) | main loop stale — no publish for `max(60s, POLL_INTERVAL×10)` |
+| `/readyz` | readiness | fully initialised + MQTT connected | initialising or MQTT disconnected |

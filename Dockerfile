@@ -10,5 +10,8 @@ WORKDIR /app
 COPY --from=builder /venv /venv
 COPY envoy2mqtt4trydan.py .
 ENV PATH="/venv/bin:$PATH"
+EXPOSE 8080
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+    CMD ["python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz', timeout=3)"]
 USER appuser
 ENTRYPOINT ["python", "envoy2mqtt4trydan.py"]
